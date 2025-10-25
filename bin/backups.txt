@@ -1,0 +1,6394 @@
+4/7: Added Enter key refreshing
+/*
+ * ExprNode.java
+ * 
+ * Store user-selected equations in LinkedList format.
+ * Store the JTextField itself as well as the "Add below" 
+ * and "Delete this equation" buttons.
+ * 
+ * Nodes are deleted based on the value of this.deleted
+ * when the app is refreshed. 
+ * 
+ * Plotting function would be O(n) regardless of whether
+ * a LinkedList or array is used, since we have to iterate
+ * through all equations, so storing the data in this way
+ * does not affect plotting performance
+ */
+
+import java.awt.event.*;
+import javax.swing.*;
+import javax.swing.event.*;
+
+public class ExprNode {
+	JTextField field;
+	JButton addButton;
+	JButton delButton;
+	static int numExprs;
+	
+	ExprNode next;
+	boolean deleted = false;
+	
+	public ExprNode(JTextField fieldParam, ExprNode nextParam) {
+		field = fieldParam;
+		next = nextParam;
+		
+		addButton = new JButton("+");
+		addButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				/*
+				 * When modifying this, make sure to modify the initial
+				 * node adding in jGRAPH.java main method!
+				 */
+				if(numExprs < jGRAPH.maxNumExprs) {
+					numExprs++;
+					
+					JTextField exprInput = new JTextField(jGRAPH.exprInputFieldSize);
+					exprInput.addKeyListener(new KeyAdapter() {
+						public void keyPressed(KeyEvent e) {
+							if(e.getKeyCode() == KeyEvent.VK_ENTER) {
+								jGRAPH.frame.repaint();
+							}
+						}
+					});
+					ExprNode newExprNode = new ExprNode(exprInput, next);
+					next = newExprNode;
+					
+					jGRAPH.frame.repaint();
+				}
+				else {
+					JOptionPane.showMessageDialog(null, "Maximum number of expressions reached.");
+				}
+			}
+		});
+		
+		delButton = new JButton("-");
+		delButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				if(numExprs >= 2) {
+					numExprs--;
+					delete();
+					
+					jGRAPH.frame.repaint();
+				}
+				else {
+					JOptionPane.showMessageDialog(null, "Cannot delete the last expression.");
+				}
+			}
+		});
+	}
+	
+	public void delete() {
+		deleted = true;
+	}
+}
+
+/*
+ * jGRAPH.java
+ * 
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java.
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static ExprNode exprInputHead; // see ListNode.java for explanation of why we use LinkedList
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	static JButton zoomInButton;
+	static JButton zoomOutButton;
+	
+	// Dimensions of the window
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	static double zoomMultiplier = 0.10; // Dimensions x (1+multiplier) for zoom out, x 1/(1+multiplier) for zoom in
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int maxNumExprs = 20; // Used only to determine the size of the color array
+	static int exprInputFieldSize = 21; // in characters; interacts with inputSidebarMaxW to put input field, "+", "-" on same line
+	static int inputSidebarMaxW = 334;
+	static boolean drawGraphOnly = false;
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+
+	
+	
+	/*
+	 * Redraw app whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		if(drawGraphOnly == false) {
+			/*
+			 * 
+			 * SIDEBAR
+			 * 
+			 */
+			/*
+			 * Equation inputs
+			 */
+			if(exprPanel != null) {
+				frame.remove(exprPanel);
+			}
+			exprPanel = new JPanel();
+			exprPanel.setLayout(new FlowLayout(FlowLayout.LEFT) {
+				// https://stackoverflow.com/questions/29605734/how-to-set-the-maximum-width-of-a-flow-layouted-jpanel
+				public Dimension preferredLayoutSize(Container target) {
+	                Dimension dim=super.preferredLayoutSize(target);
+	                dim.width=Math.min(inputSidebarMaxW, dim.width);
+	                return dim;
+	            }
+			}); 
+			
+			// Populate equation inputs
+			ExprNode ptr = exprInputHead;
+			ExprNode laggingPtr = null;
+			while(ptr != null) {
+				if(ptr.deleted == true) { // Remove deleted node from LinkedList
+					if(laggingPtr == null) {
+						exprInputHead = exprInputHead.next;
+					}
+					else {
+						laggingPtr.next = ptr.next;
+					}
+					laggingPtr = ptr;
+					ptr = ptr.next;
+					continue;
+				}
+				
+				exprPanel.add(ptr.field);
+				exprPanel.add(ptr.addButton);
+				exprPanel.add(ptr.delButton);
+				laggingPtr = ptr;
+				ptr = ptr.next;
+			}
+			
+			// Refresh entire app
+			refreshButton = new JButton("Refresh");
+			refreshButton.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent e) {
+					frame.repaint();
+				}
+			});
+			exprPanel.add(refreshButton);
+			
+			// Settings panel
+			settingsButton = new JButton("Settings");
+			settingsButton.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent event) {
+					
+					// If you put these outside of the addActionListener() declaration, 
+					// any invalid inputs will remain stored in the JTextFields (though
+					// they won't be put into the variables themselves).
+					settingsPanel = new JPanel();
+					JLabel xMinInputLabel = new JLabel("Graph X Min");
+					JTextField xMinInput = new JTextField(Double.toString(xMin));
+					JLabel xMaxInputLabel = new JLabel("Graph X Max");
+					JTextField xMaxInput = new JTextField(Double.toString(xMax));
+					JLabel yMinInputLabel = new JLabel("Graph Y Min");
+					JTextField yMinInput = new JTextField(Double.toString(yMin));
+					JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+					JTextField yMaxInput = new JTextField(Double.toString(yMax));
+					
+					settingsPanel.add(xMinInputLabel);
+					settingsPanel.add(xMinInput);
+					settingsPanel.add(xMaxInputLabel);
+					settingsPanel.add(xMaxInput);
+					settingsPanel.add(yMinInputLabel);
+					settingsPanel.add(yMinInput);
+					settingsPanel.add(yMaxInputLabel);
+					settingsPanel.add(yMaxInput);
+					
+					JOptionPane.showMessageDialog(null, settingsPanel);
+					double xMinNew, xMaxNew, yMinNew, yMaxNew;
+					
+					try {
+						xMinNew = Double.parseDouble(xMinInput.getText());
+						xMaxNew = Double.parseDouble(xMaxInput.getText());
+						yMinNew = Double.parseDouble(yMinInput.getText());
+						yMaxNew = Double.parseDouble(yMaxInput.getText());
+						
+						frame.repaint();
+					}
+					catch (NumberFormatException e) {
+						JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+						return;
+					}
+					
+					if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+						JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+						return;
+					}
+					xMin = xMinNew;
+					xMax = xMaxNew;
+					yMin = yMinNew;
+					yMax = yMaxNew;
+				}
+			});
+			exprPanel.add(settingsButton);
+			
+			zoomInButton = new JButton("Zoom +");
+			zoomInButton.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent e) {
+					// Zoom centered on current window center, NOT origin
+					double graphOriginX = (xMin + xMax) / 2;
+					double graphOriginY = (yMin + yMax) / 2;
+					double graphW = xMax - xMin;
+					double graphH = yMax - yMin;
+					
+					xMin = graphOriginX - graphW / 2 * (1 / (1 + zoomMultiplier));
+					xMax = graphOriginX + graphW / 2 * (1 / (1 + zoomMultiplier));
+					yMin = graphOriginY - graphH / 2 * (1 / (1 + zoomMultiplier));
+					yMax = graphOriginY + graphH / 2 * (1 / (1 + zoomMultiplier));
+					
+					frame.repaint();
+				}
+			});
+			exprPanel.add(zoomInButton);
+			
+			zoomOutButton = new JButton("Zoom -");
+			zoomOutButton.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent e) {
+					// Zoom centered on current window center, NOT origin
+					double graphOriginX = (xMin + xMax) / 2;
+					double graphOriginY = (yMin + yMax) / 2;
+					double graphW = xMax - xMin;
+					double graphH = yMax - yMin;
+					
+					xMin = graphOriginX - graphW / 2 * (1 + zoomMultiplier);
+					xMax = graphOriginX + graphW / 2 * (1 + zoomMultiplier);
+					yMin = graphOriginY - graphH / 2 * (1 + zoomMultiplier);
+					yMax = graphOriginY + graphH / 2 * (1 + zoomMultiplier);
+					
+					frame.repaint();
+				}
+			});
+			exprPanel.add(zoomOutButton);
+			
+			frame.add(exprPanel, BorderLayout.WEST);
+		}
+		
+		/*
+		 * 
+		 * GRAPH
+		 * 
+		 */
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		ExprNode ptr = exprInputHead;
+		while(ptr != null) {
+			if(ptr.deleted == true) {
+				ptr = ptr.next;
+				continue;
+			}
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(ptr.field.getText()).variables("x").build();
+				if(ptr.field.getBackground().equals(invalidExprColor)) {
+					ptr.field.setBackground(jGRAPH.colorPalette[jGRAPH.rand.nextInt(jGRAPH.colorPalette.length)]);
+				}
+				else {
+					ptr.field.setBackground(ptr.field.getBackground());
+				}
+				
+				// Default interval at which f(x) is evaluated when graphing
+				// Will be adjusted based on how steep the graph is, in order
+				// to prevent the graph from appearing "dotted"
+				double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+				
+				g2d.setColor(ptr.field.getBackground());
+				double x = xMin;
+				double xPrev = x - xStepDefault;
+				while(x < xMax) {
+					try {
+						double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+						double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+						
+						g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+					}
+					catch(ArithmeticException e) { // In case the x value is not in the domain
+						
+					}
+					
+					double xPrevCopy = xPrev;
+					xPrev = x;
+					
+					// Ensure that we don't plot the points too close together or too far apart
+					try {
+						double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+						x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+					}
+					catch(ArithmeticException e) { // Deal with general instances of division by 0
+						x += xStepDefault;
+					}
+				}
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				ptr.field.setBackground(invalidExprColor);
+			}
+			
+			ptr = ptr.next;
+			
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		/*
+		 * Expression input
+		 */
+		JTextField exprInput = new JTextField(exprInputFieldSize);
+		exprInput.addKeyListener(new KeyAdapter() {
+			public void keyPressed(KeyEvent e) {
+				if(e.getKeyCode() == KeyEvent.VK_ENTER) {
+					frame.repaint();
+				}
+			}
+		});
+		exprInputHead = new ExprNode(exprInput, null); // dummy node
+		ExprNode.numExprs = 1;
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+}
+
+
+/*
+ * Coord.java
+ * 
+ * Store x and y coordinates in a more organized fashion.
+ * 
+ */
+public class Coord {
+	double x;
+	double y;
+	
+	public Coord(double x, double y) {
+		this.x = x;
+		this.y = y;
+	}
+}
+
+
+####################################################################################################################################################################################################################################
+
+
+4/4/2025: Added zooming functionality
+
+/*
+ * ExprNode.java
+ * 
+ * Store user-selected equations in LinkedList format.
+ * Store the JTextField itself as well as the "Add below" 
+ * and "Delete this equation" buttons.
+ * 
+ * Nodes are deleted based on the value of this.deleted
+ * when the app is refreshed. 
+ * 
+ * Plotting function would be O(n) regardless of whether
+ * a LinkedList or array is used, since we have to iterate
+ * through all equations, so storing the data in this way
+ * does not affect plotting performance
+ */
+
+import java.awt.event.*;
+import javax.swing.*;
+
+public class ExprNode {
+	JTextField field;
+	JButton addButton;
+	JButton delButton;
+	static int numExprs;
+	
+	ExprNode next;
+	boolean deleted = false;
+	
+	public ExprNode(JTextField fieldParam, ExprNode nextParam) {
+		field = fieldParam;
+		next = nextParam;
+		
+		addButton = new JButton("+");
+		addButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				if(numExprs < jGRAPH.maxNumExprs) {
+					numExprs++;
+					
+					JTextField exprInput = new JTextField(jGRAPH.exprInputFieldSize);
+					
+					ExprNode newExprNode = new ExprNode(exprInput, next);
+					next = newExprNode;
+					
+					jGRAPH.frame.repaint();
+				}
+				else {
+					JOptionPane.showMessageDialog(null, "Maximum number of expressions reached.");
+				}
+			}
+		});
+		
+		delButton = new JButton("-");
+		delButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				if(numExprs >= 2) {
+					numExprs--;
+					delete();
+					
+					jGRAPH.frame.repaint();
+				}
+				else {
+					JOptionPane.showMessageDialog(null, "Cannot delete the last expression.");
+				}
+			}
+		});
+	}
+	
+	public void delete() {
+		deleted = true;
+	}
+}
+
+
+
+/*
+ * jGRAPH.java
+ * 
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java.
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static ExprNode exprInputHead; // see ListNode.java for explanation of why we use LinkedList
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	static JButton zoomInButton;
+	static JButton zoomOutButton;
+	
+	// Dimensions of the window
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	static double zoomMultiplier = 0.10; // Dimensions x (1+multiplier) for zoom out, x 1/(1+multiplier) for zoom in
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int maxNumExprs = 20; // Used only to determine the size of the color array
+	static int exprInputFieldSize = 21; // in characters; interacts with inputSidebarMaxW to put input field, "+", "-" on same line
+	static int inputSidebarMaxW = 334;
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		/*
+		 * 
+		 * SIDEBAR
+		 * 
+		 */
+		/*
+		 * Equation inputs
+		 */
+		if(exprPanel != null) {
+			frame.remove(exprPanel);
+		}
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new FlowLayout(FlowLayout.LEFT) {
+			// https://stackoverflow.com/questions/29605734/how-to-set-the-maximum-width-of-a-flow-layouted-jpanel
+			public Dimension preferredLayoutSize(Container target) {
+                Dimension dim=super.preferredLayoutSize(target);
+                dim.width=Math.min(inputSidebarMaxW, dim.width);
+                return dim;
+            }
+		}); 
+		
+		// Populate equation inputs
+		ExprNode ptr = exprInputHead;
+		ExprNode laggingPtr = null;
+		while(ptr != null) {
+			if(ptr.deleted == true) { // Remove deleted node from LinkedList
+				if(laggingPtr == null) {
+					exprInputHead = exprInputHead.next;
+				}
+				else {
+					laggingPtr.next = ptr.next;
+				}
+				laggingPtr = ptr;
+				ptr = ptr.next;
+				continue;
+			}
+			
+			exprPanel.add(ptr.field);
+			exprPanel.add(ptr.addButton);
+			exprPanel.add(ptr.delButton);
+			laggingPtr = ptr;
+			ptr = ptr.next;
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+					
+					frame.repaint();
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		zoomInButton = new JButton("Zoom +");
+		zoomInButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				// Zoom centered on current window center, NOT origin
+				double graphOriginX = (xMin + xMax) / 2;
+				double graphOriginY = (yMin + yMax) / 2;
+				double graphW = xMax - xMin;
+				double graphH = yMax - yMin;
+				
+				xMin = graphOriginX - graphW / 2 * (1 / (1 + zoomMultiplier));
+				xMax = graphOriginX + graphW / 2 * (1 / (1 + zoomMultiplier));
+				yMin = graphOriginY - graphH / 2 * (1 / (1 + zoomMultiplier));
+				yMax = graphOriginY + graphH / 2 * (1 / (1 + zoomMultiplier));
+				
+				frame.repaint();
+			}
+		});
+		exprPanel.add(zoomInButton);
+		
+		zoomOutButton = new JButton("Zoom -");
+		zoomOutButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				// Zoom centered on current window center, NOT origin
+				double graphOriginX = (xMin + xMax) / 2;
+				double graphOriginY = (yMin + yMax) / 2;
+				double graphW = xMax - xMin;
+				double graphH = yMax - yMin;
+				
+				xMin = graphOriginX - graphW / 2 * (1 + zoomMultiplier);
+				xMax = graphOriginX + graphW / 2 * (1 + zoomMultiplier);
+				yMin = graphOriginY - graphH / 2 * (1 + zoomMultiplier);
+				yMax = graphOriginY + graphH / 2 * (1 + zoomMultiplier);
+				
+				frame.repaint();
+			}
+		});
+		exprPanel.add(zoomOutButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		
+		
+		
+		
+		/*
+		 * 
+		 * GRAPH
+		 * 
+		 */
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		ptr = exprInputHead;
+		while(ptr != null) {
+			if(ptr.deleted == true) {
+				ptr = ptr.next;
+				continue;
+			}
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(ptr.field.getText()).variables("x").build();
+				if(ptr.field.getBackground().equals(invalidExprColor)) {
+					ptr.field.setBackground(jGRAPH.colorPalette[jGRAPH.rand.nextInt(jGRAPH.colorPalette.length)]);
+				}
+				else {
+					ptr.field.setBackground(ptr.field.getBackground());
+				}
+				
+				// Default interval at which f(x) is evaluated when graphing
+				// Will be adjusted based on how steep the graph is, in order
+				// to prevent the graph from appearing "dotted"
+				double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+				
+				g2d.setColor(ptr.field.getBackground());
+				double x = xMin;
+				double xPrev = x - xStepDefault;
+				while(x < xMax) {
+					try {
+						double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+						double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+						
+						g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+					}
+					catch(ArithmeticException e) { // In case the x value is not in the domain
+						
+					}
+					
+					double xPrevCopy = xPrev;
+					xPrev = x;
+					
+					// Ensure that we don't plot the points too close together or too far apart
+					try {
+						double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+						x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+					}
+					catch(ArithmeticException e) { // Deal with general instances of division by 0
+						x += xStepDefault;
+					}
+				}
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				ptr.field.setBackground(invalidExprColor);
+			}
+			
+			ptr = ptr.next;
+			
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		/*
+		 * Expression input
+		 */
+		exprInputHead = new ExprNode(new JTextField(exprInputFieldSize), null);
+		ExprNode.numExprs = 1;
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+//		// Assign colors
+//		exprColorArr = new Color[maxNumExprs];
+//		for(int j = 0; j < maxNumExprs; j++) {
+//			exprColorArr[j] = colorPalette[j % colorPalette.length];
+//		}
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+}
+
+
+/*
+ * Coord.java
+ * 
+ * Store x and y coordinates in a more organized fashion.
+ * 
+ */
+public class Coord {
+	double x;
+	double y;
+	
+	public Coord(double x, double y) {
+		this.x = x;
+		this.y = y;
+	}
+}
+------------------------------------------------------------------------------
+
+
+
+
+
+4/4: colors made to stay the same
+
+/*
+ * jGRAPH.java
+ * 
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java.
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static ExprNode exprInputHead; // see ListNode.java for explanation of why we use LinkedList
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int maxNumExprs = 20; // Used only to determine the size of the color array
+	static int exprInputFieldSize = 21; // in characters; interacts with inputSidebarMaxW to put input field, "+", "-" on same line
+	static int inputSidebarMaxW = 334;
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+//	static Color[] exprColorArr;
+
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		/*
+		 * Equation inputs
+		 */
+		if(exprPanel != null) {
+			frame.remove(exprPanel);
+		}
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new FlowLayout(FlowLayout.LEFT) {
+			// https://stackoverflow.com/questions/29605734/how-to-set-the-maximum-width-of-a-flow-layouted-jpanel
+			public Dimension preferredLayoutSize(Container target) {
+                Dimension dim=super.preferredLayoutSize(target);
+                dim.width=Math.min(inputSidebarMaxW, dim.width);
+                return dim;
+            }
+		}); 
+		
+		// Populate equation inputs
+		ExprNode ptr = exprInputHead;
+		ExprNode laggingPtr = null;
+		while(ptr != null) {
+			if(ptr.deleted == true) { // Remove deleted node from LinkedList
+				if(laggingPtr == null) {
+					exprInputHead = exprInputHead.next;
+				}
+				else {
+					laggingPtr.next = ptr.next;
+				}
+				laggingPtr = ptr;
+				ptr = ptr.next;
+				continue;
+			}
+			
+			exprPanel.add(ptr.field);
+			exprPanel.add(ptr.addButton);
+			exprPanel.add(ptr.delButton);
+			laggingPtr = ptr;
+			ptr = ptr.next;
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		ptr = exprInputHead;
+		int index = 0;
+		while(ptr != null) {
+			if(ptr.deleted == true) {
+				ptr = ptr.next;
+				continue;
+			}
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(ptr.field.getText()).variables("x").build();
+				if(ptr.field.getBackground().equals(invalidExprColor)) {
+					ptr.field.setBackground(jGRAPH.colorPalette[jGRAPH.rand.nextInt(jGRAPH.colorPalette.length)]);
+				}
+				else {
+					ptr.field.setBackground(ptr.field.getBackground());
+				}
+				
+				// Default interval at which f(x) is evaluated when graphing
+				// Will be adjusted based on how steep the graph is, in order
+				// to prevent the graph from appearing "dotted"
+				double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+				
+				g2d.setColor(ptr.field.getBackground());
+				double x = xMin;
+				double xPrev = x - xStepDefault;
+				while(x < xMax) {
+					try {
+						double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+						double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+						
+						g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+					}
+					catch(ArithmeticException e) { // In case the x value is not in the domain
+						
+					}
+					
+					double xPrevCopy = xPrev;
+					xPrev = x;
+					
+					// Ensure that we don't plot the points too close together or too far apart
+					try {
+						double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+						x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+					}
+					catch(ArithmeticException e) { // Deal with general instances of division by 0
+						x += xStepDefault;
+					}
+				}
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				ptr.field.setBackground(invalidExprColor);
+			}
+			
+			ptr = ptr.next;
+			index++;
+			
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		/*
+		 * Expression input
+		 */
+		exprInputHead = new ExprNode(new JTextField(exprInputFieldSize), null);
+		ExprNode.numExprs = 1;
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+//		// Assign colors
+//		exprColorArr = new Color[maxNumExprs];
+//		for(int j = 0; j < maxNumExprs; j++) {
+//			exprColorArr[j] = colorPalette[j % colorPalette.length];
+//		}
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+}
+
+
+/*
+ * ExprNode.java
+ * 
+ * Store user-selected equations in LinkedList format.
+ * Store the JTextField itself as well as the "Add below" 
+ * and "Delete this equation" buttons.
+ * 
+ * Nodes are deleted based on the value of this.deleted
+ * when the app is refreshed. 
+ * 
+ * Plotting function would be O(n) regardless of whether
+ * a LinkedList or array is used, since we have to iterate
+ * through all equations, so storing the data in this way
+ * does not affect plotting performance
+ */
+
+import java.awt.*;
+import java.awt.event.*;
+import javax.swing.*;
+
+public class ExprNode {
+	JTextField field;
+	JButton addButton;
+	JButton delButton;
+	static int numExprs;
+	
+	ExprNode next;
+	boolean deleted = false;
+	
+	public ExprNode(JTextField fieldParam, ExprNode nextParam) {
+		field = fieldParam;
+		next = nextParam;
+		
+		addButton = new JButton("+");
+		addButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				if(numExprs < jGRAPH.maxNumExprs) {
+					numExprs++;
+					
+					JTextField exprInput = new JTextField(jGRAPH.exprInputFieldSize);
+					
+					ExprNode newExprNode = new ExprNode(exprInput, next);
+					next = newExprNode;
+					
+					jGRAPH.frame.repaint();
+				}
+				else {
+					JOptionPane.showMessageDialog(null, "Maximum number of expressions reached.");
+				}
+			}
+		});
+		
+		delButton = new JButton("-");
+		delButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				if(numExprs >= 2) {
+					numExprs--;
+					delete();
+					
+					jGRAPH.frame.repaint();
+				}
+				else {
+					JOptionPane.showMessageDialog(null, "Cannot delete the last expression.");
+				}
+			}
+		});
+	}
+	
+	public void delete() {
+		deleted = true;
+	}
+}
+
+
+/*
+ * Coord.java
+ * 
+ * Store x and y coordinates in a more organized fashion.
+ * 
+ */
+public class Coord {
+	double x;
+	double y;
+	
+	public Coord(double x, double y) {
+		this.x = x;
+		this.y = y;
+	}
+}
+
+
+
+4/3: Deletion and insertion optimized
+
+/*
+ * ExprNode.java
+ * 
+ * Store user-selected equations in LinkedList format.
+ * Store the JTextField itself as well as the "Add below" 
+ * and "Delete this equation" buttons.
+ * 
+ * Nodes are deleted based on the value of this.deleted
+ * when the app is refreshed. 
+ * 
+ * Plotting function would be O(n) regardless of whether
+ * a LinkedList or array is used, since we have to iterate
+ * through all equations, so storing the data in this way
+ * does not affect plotting performance
+ */
+
+import java.awt.*;
+import java.awt.event.*;
+import javax.swing.*;
+
+public class ExprNode {
+	JTextField field;
+	JButton addButton;
+	JButton delButton;
+	static int numExprs;
+	
+	ExprNode next;
+	boolean deleted = false;
+	
+	public ExprNode(JTextField fieldParam, int exprInputFieldSize, ExprNode nextParam) {
+		field = fieldParam;
+		next = nextParam;
+		
+		addButton = new JButton("+");
+		addButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				numExprs++;
+				
+				JTextField exprInput = new JTextField();
+				exprInput.setColumns(exprInputFieldSize); // Prevent text input from stretching to fill exprPanel
+				
+				ExprNode newExprNode = new ExprNode(exprInput, exprInputFieldSize, next);
+				next = newExprNode;
+			}
+		});
+		
+		delButton = new JButton("-");
+		delButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				if(numExprs >= 2) {
+					numExprs--;
+					delete();
+				}
+			}
+		});
+	}
+	
+	public void delete() {
+		deleted = true;
+	}
+}
+
+
+
+/*
+ * jGRAPH.java
+ * 
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java.
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static ExprNode exprInputHead; // see ListNode.java for explanation of why we use LinkedList
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int maxNumExprs = 20; // Used only to determine the size of the color array
+	static int exprInputFieldSize = 21; // in characters; interacts with inputSidebarMaxW to put input field, "+", "-" on same line
+	static int inputSidebarMaxW = 334;
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		/*
+		 * Equation inputs
+		 */
+		if(exprPanel != null) {
+			frame.remove(exprPanel);
+		}
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new FlowLayout(FlowLayout.LEFT) {
+			// https://stackoverflow.com/questions/29605734/how-to-set-the-maximum-width-of-a-flow-layouted-jpanel
+			public Dimension preferredLayoutSize(Container target) {
+                Dimension dim=super.preferredLayoutSize(target);
+                dim.width=Math.min(inputSidebarMaxW, dim.width);
+                return dim;
+            }
+		}); 
+		
+		// Populate equation inputs
+		ExprNode ptr = exprInputHead;
+		ExprNode laggingPtr = null;
+		while(ptr != null) {
+			if(ptr.deleted == true) { // Remove deleted node from LinkedList
+				if(laggingPtr == null) {
+					exprInputHead = exprInputHead.next;
+				}
+				else {
+					laggingPtr.next = ptr.next;
+				}
+				laggingPtr = ptr;
+				ptr = ptr.next;
+				continue;
+			}
+			
+			exprPanel.add(ptr.field);
+			exprPanel.add(ptr.addButton);
+			exprPanel.add(ptr.delButton);
+			laggingPtr = ptr;
+			ptr = ptr.next;
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		ptr = exprInputHead;
+		int index = 0;
+		while(ptr != null) {
+			if(ptr.deleted == true) {
+				ptr = ptr.next;
+				continue;
+			}
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(ptr.field.getText()).variables("x").build();
+				ptr.field.setBackground(exprColorArr[index]);
+				
+				// Default interval at which f(x) is evaluated when graphing
+				// Will be adjusted based on how steep the graph is, in order
+				// to prevent the graph from appearing "dotted"
+				double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+				
+				g2d.setColor(exprColorArr[index]);
+				double x = xMin;
+				double xPrev = x - xStepDefault;
+				while(x < xMax) {
+					try {
+						double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+						double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+						
+						g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+					}
+					catch(ArithmeticException e) { // In case the x value is not in the domain
+						
+					}
+					
+					double xPrevCopy = xPrev;
+					xPrev = x;
+					
+					// Ensure that we don't plot the points too close together or too far apart
+					try {
+						double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+						x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+					}
+					catch(ArithmeticException e) { // Deal with general instances of division by 0
+						x += xStepDefault;
+					}
+				}
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				ptr.field.setBackground(invalidExprColor);
+			}
+			
+			ptr = ptr.next;
+			index++;
+			
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		/*
+		 * Expression input
+		 */
+		exprInputHead = new ExprNode(new JTextField(exprInputFieldSize), exprInputFieldSize, null);
+		ExprNode.numExprs = 1;
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		// Assign colors
+		exprColorArr = new Color[maxNumExprs];
+		for(int j = 0; j < maxNumExprs; j++) {
+			exprColorArr[j] = colorPalette[j % colorPalette.length];
+		}
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+}
+
+
+
+
+/*
+ * Coord.java
+ * 
+ * Store x and y coordinates in a more organized fashion.
+ * 
+ */
+public class Coord {
+	double x;
+	double y;
+	
+	public Coord(double x, double y) {
+		this.x = x;
+		this.y = y;
+	}
+}
+
+
+
+
+
+
+---------------------------------------------------------------------
+
+
+
+
+
+
+
+3/28: the insertion and deletion is not working
+
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static ExprNode exprInputHead; // see ExprNode.java for explanation of why we use LinkedList
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 1;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Redraw entire app whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		// Rebuild exprPanel
+		exprPanel = new JPanel();
+		exprPanel.removeAll();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 3)); // List everything vertically
+		
+		ExprNode ptrTrailing = null;
+		ExprNode ptr = exprInputHead;
+		while(ptr != null) {
+			if(ptr.deleted == false) {
+				exprPanel.add(ptr.field);
+				exprPanel.add(ptr.addButton);
+				exprPanel.add(ptr.delButton);
+			}
+			else {
+				if(ptrTrailing != null) {
+					ptrTrailing.next = ptr.next;
+				}
+				else {
+					exprInputHead = exprInputHead.next;
+				}
+			}
+			ptrTrailing = ptr;
+			ptr = ptr.next;
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				System.out.println("Refresh activated");
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		ptr = exprInputHead;
+		while(ptr != null) {
+			// Leave invalid expressions uncolored
+			try {
+				int colorIndex = rand.nextInt(colorPalette.length);
+				expr =  new ExpressionBuilder(ptr.field.getText()).variables("x").build();
+				ptr.field.setBackground(colorPalette[colorIndex]);
+				
+				// Default interval at which f(x) is evaluated when graphing
+				// Will be adjusted based on how steep the graph is, in order
+				// to prevent the graph from appearing "dotted"
+				double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+				
+				g2d.setColor(colorPalette[colorIndex]);
+				double x = xMin;
+				double xPrev = x - xStepDefault;
+				while(x < xMax) {
+					try {
+						double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+						double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+						
+						g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+					}
+					catch(ArithmeticException e) { // In case the x value is not in the domain
+						
+					}
+					
+					double xPrevCopy = xPrev;
+					xPrev = x;
+					
+					// Ensure that we don't plot the points too close together or too far apart
+					try {
+						double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+						x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+					}
+					catch(ArithmeticException e) { // Deal with general instances of division by 0
+						x += xStepDefault;
+					}
+				}
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				ptr.field.setBackground(invalidExprColor);
+			}
+			
+			ptr = ptr.next;
+			
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprInputHead = new ExprNode(null, exprInputFieldSize, null); // Start with dummy node
+		ExprNode ptr = exprInputHead;
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			ptr.next = new ExprNode(exprInput, exprInputFieldSize, null);
+			ptr = ptr.next;
+		}
+		exprInputHead = exprInputHead.next;
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+/*
+ * Store user-selected equations in LinkedList format.
+ * Store the JTextField itself as well as the "Add below" 
+ * and "Delete this equation" buttons.
+ * Nodes are deleted based on the value of this.deleted
+ * when the app is refreshed. 
+ * TODO: Careful if two consecutive nodes are deleted
+ * before refreshing
+ * Plotting function would be O(n) regardless of whether
+ * a LinkedList or array is used, since we have to iterate
+ * through all equations, so storing the data in this way
+ * does not affect plotting performance
+ */
+
+import java.awt.*;
+import java.awt.event.*;
+import javax.swing.*;
+
+public class ExprNode {
+	JTextField field;
+	JButton addButton;
+	JButton delButton;
+	
+	ExprNode next;
+	boolean deleted = false;
+	
+	public ExprNode(JTextField fieldParam, int exprInputFieldSize, ExprNode nextParam) {
+		field = fieldParam;
+		next = nextParam;
+		
+		addButton = new JButton("+");
+		addButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				JTextField exprInput = new JTextField(exprInputFieldSize);
+				exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+				
+				ExprNode newExprNode = new ExprNode(exprInput, exprInputFieldSize, next);
+				next = newExprNode;
+			}
+		});
+		
+		delButton = new JButton("-");
+		delButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				delete();
+			}
+		});
+	}
+	
+	public void delete() {
+		deleted = true;
+	}
+}
+
+
+3/27: converted it to use listnodes
+
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static JTextFieldNode exprInputHead; // see ListNode.java for explanation of why we use LinkedList
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 3;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		JTextFieldNode ptr = exprInputHead;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(ptr.val.getText()).variables("x").build();
+				ptr.val.setBackground(exprColorArr[j]);
+				
+				// Default interval at which f(x) is evaluated when graphing
+				// Will be adjusted based on how steep the graph is, in order
+				// to prevent the graph from appearing "dotted"
+				double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+				
+				g2d.setColor(exprColorArr[j]);
+				double x = xMin;
+				double xPrev = x - xStepDefault;
+				while(x < xMax) {
+					try {
+						double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+						double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+						
+						g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+					}
+					catch(ArithmeticException e) { // In case the x value is not in the domain
+						
+					}
+					
+					double xPrevCopy = xPrev;
+					xPrev = x;
+					
+					// Ensure that we don't plot the points too close together or too far apart
+					try {
+						double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+						x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+					}
+					catch(ArithmeticException e) { // Deal with general instances of division by 0
+						x += xStepDefault;
+					}
+				}
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				ptr.val.setBackground(invalidExprColor);
+			}
+			
+			ptr = ptr.next;
+			
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		JTextField exprInput = new JTextField(exprInputFieldSize);
+		exprInputHead = new JTextFieldNode(exprInput);
+		exprPanel.add(exprInputHead.val);
+		JTextFieldNode ptr = exprInputHead;
+		for(int j = 1; j < numExprs; j++) {
+			exprInput = new JTextField(exprInputFieldSize);
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			ptr.next = new JTextFieldNode(exprInput);
+			exprPanel.add(ptr.next.val);
+			ptr = ptr.next;
+		}
+		
+		// Assign colors
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			exprColorArr[j] = colorPalette[j % colorPalette.length];
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+3/27: Fixed bug with exponents causing an actual error instead of being caught
+
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static JTextField[] exprInputArr;
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 3;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+				
+				// Default interval at which f(x) is evaluated when graphing
+				// Will be adjusted based on how steep the graph is, in order
+				// to prevent the graph from appearing "dotted"
+				double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+				
+				g2d.setColor(exprColorArr[j]);
+				double x = xMin;
+				double xPrev = x - xStepDefault;
+				while(x < xMax) {
+					try {
+						double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+						double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+						
+						g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+					}
+					catch(ArithmeticException e) { // In case the x value is not in the domain
+						
+					}
+					
+					double xPrevCopy = xPrev;
+					xPrev = x;
+					
+					// Ensure that we don't plot the points too close together or too far apart
+					try {
+						double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+						x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+					}
+					catch(ArithmeticException e) { // Deal with general instances of division by 0
+						x += xStepDefault;
+					}
+				}
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			exprPanel.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			exprColorArr[j] = colorPalette[j % colorPalette.length];
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+3/27: Fix exponent bug
+
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static JTextField[] exprInputArr;
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 3;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+				
+				// Default interval at which f(x) is evaluated when graphing
+				// Will be adjusted based on how steep the graph is, in order
+				// to prevent the graph from appearing "dotted"
+				double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+				
+				g2d.setColor(exprColorArr[j]);
+				double x = xMin;
+				double xPrev = x - xStepDefault;
+				while(x < xMax) {
+					try {
+						double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+						double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+						
+						g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+					}
+					catch(ArithmeticException e) { // In case the x value is not in the domain
+						
+					}
+					
+					double xPrevCopy = xPrev;
+					xPrev = x;
+					
+					// Ensure that we don't plot the points too close together or too far apart
+					try {
+						double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+						x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+					}
+					catch(ArithmeticException e) { // Deal with general instances of division by 0
+						x += xStepDefault;
+					}
+				}
+			}
+			catch(Exception e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			exprPanel.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			exprColorArr[j] = colorPalette[j % colorPalette.length];
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+
+3/27/2025: color each graph
+
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 900;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static JTextField[] exprInputArr;
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 3;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	
+	// Colors
+	static Color[] colorPalette = new Color[]{
+			// https://docs.oracle.com/javase/7/docs/api/java/awt/Color.html
+			// List of possible graph colors (light ones only)
+			Color.CYAN, 
+			Color.GREEN, 
+			Color.MAGENTA,
+			Color.ORANGE,
+			Color.PINK,
+			Color.YELLOW
+	};
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+			// Default interval at which f(x) is evaluated when graphing
+			// Will be adjusted based on how steep the graph is, in order
+			// to prevent the graph from appearing "dotted"
+			double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+			
+			g2d.setColor(exprColorArr[j]);
+			double x = xMin;
+			double xPrev = x - xStepDefault;
+			while(x < xMax) {
+				try {
+					double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+					double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+					
+					g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+				}
+				catch(ArithmeticException e) { // In case the x value is not in the domain
+					
+				}
+				
+				double xPrevCopy = xPrev;
+				xPrev = x;
+				
+				// Ensure that we don't plot the points too close together or too far apart
+				try {
+					double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+					x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+				}
+				catch(ArithmeticException e) { // Deal with general instances of division by 0
+					x += xStepDefault;
+				}
+			}
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			exprPanel.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			exprColorArr[j] = colorPalette[j % colorPalette.length];
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+3/27/2025: protected input of settings
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 999;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static JTextField[] exprInputArr;
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 2;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+			// Default interval at which f(x) is evaluated when graphing
+			// Will be adjusted based on how steep the graph is, in order
+			// to prevent the graph from appearing "dotted"
+			double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+			
+			g2d.setColor(exprColorArr[j]);
+			double x = xMin;
+			double xPrev = x - xStepDefault;
+			while(x < xMax) {
+				try {
+					double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+					double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+					
+					g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+				}
+				catch(ArithmeticException e) { // In case the x value is not in the domain
+					
+				}
+				
+				double xPrevCopy = xPrev;
+				xPrev = x;
+				
+				// Ensure that we don't plot the points too close together or too far apart
+				try {
+					double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+					x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+				}
+				catch(ArithmeticException e) { // Deal with general instances of division by 0
+					x += xStepDefault;
+				}
+			}
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			exprPanel.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		// https://stackoverflow.com/a/4246418
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			// Apparently nextFloat() returns a double
+			double r = rand.nextDouble() / 2f + 0.5; 
+			double g = rand.nextDouble() / 2f + 0.5;
+			double b = rand.nextDouble() / 2f + 0.5;
+			exprColorArr[j] = new Color((float) r, (float) g, (float) b);
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				
+				// If you put these outside of the addActionListener() declaration, 
+				// any invalid inputs will remain stored in the JTextFields (though
+				// they won't be put into the variables themselves).
+				settingsPanel = new JPanel();
+				JLabel xMinInputLabel = new JLabel("Graph X Min");
+				JTextField xMinInput = new JTextField(Double.toString(xMin));
+				JLabel xMaxInputLabel = new JLabel("Graph X Max");
+				JTextField xMaxInput = new JTextField(Double.toString(xMax));
+				JLabel yMinInputLabel = new JLabel("Graph Y Min");
+				JTextField yMinInput = new JTextField(Double.toString(yMin));
+				JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+				JTextField yMaxInput = new JTextField(Double.toString(yMax));
+				
+				settingsPanel.add(xMinInputLabel);
+				settingsPanel.add(xMinInput);
+				settingsPanel.add(xMaxInputLabel);
+				settingsPanel.add(xMaxInput);
+				settingsPanel.add(yMinInputLabel);
+				settingsPanel.add(yMinInput);
+				settingsPanel.add(yMaxInputLabel);
+				settingsPanel.add(yMaxInput);
+				
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				double xMinNew, xMaxNew, yMinNew, yMaxNew;
+				
+				try {
+					xMinNew = Double.parseDouble(xMinInput.getText());
+					xMaxNew = Double.parseDouble(xMaxInput.getText());
+					yMinNew = Double.parseDouble(yMinInput.getText());
+					yMaxNew = Double.parseDouble(yMaxInput.getText());
+				}
+				catch (NumberFormatException e) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				
+				if(!(xMaxNew > xMinNew && yMaxNew > yMinNew)) {
+					JOptionPane.showMessageDialog(null, "Invalid settings. Your previous settings remain.");
+					return;
+				}
+				xMin = xMinNew;
+				xMax = xMaxNew;
+				yMin = yMinNew;
+				yMax = yMaxNew;
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+3/27/2025: moved all declarations of variables (major ones at least) to instance variables
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 999;
+	
+	// App elements
+	static JFrame frame;
+	static JPanel exprPanel;
+	static JTextField[] exprInputArr;
+	static JButton settingsButton;
+	static JPanel settingsPanel;
+	static JButton refreshButton;
+	static JPanel jGRAPHInstance;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 2;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	/* 
+	 * https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	 * Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	 */
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+			// Default interval at which f(x) is evaluated when graphing
+			// Will be adjusted based on how steep the graph is, in order
+			// to prevent the graph from appearing "dotted"
+			double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+			
+			g2d.setColor(exprColorArr[j]);
+			double x = xMin;
+			double xPrev = x - xStepDefault;
+			while(x < xMax) {
+				try {
+					double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+					double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+					
+					g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+				}
+				catch(ArithmeticException e) { // In case the x value is not in the domain
+					
+				}
+				
+				double xPrevCopy = xPrev;
+				xPrev = x;
+				
+				// Ensure that we don't plot the points too close together or too far apart
+				try {
+					double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+					x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+				}
+				catch(ArithmeticException e) { // Deal with general instances of division by 0
+					x += xStepDefault;
+				}
+			}
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			exprPanel.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		// https://stackoverflow.com/a/4246418
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			// Apparently nextFloat() returns a double
+			double r = rand.nextDouble() / 2f + 0.5; 
+			double g = rand.nextDouble() / 2f + 0.5;
+			double b = rand.nextDouble() / 2f + 0.5;
+			exprColorArr[j] = new Color((float) r, (float) g, (float) b);
+		}
+		
+		// Refresh entire app
+		refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		settingsButton = new JButton("Graph Settings");
+		settingsPanel = new JPanel();
+		
+		JLabel xMinInputLabel = new JLabel("Graph X Min");
+		JTextField xMinInput = new JTextField(Double.toString(xMin));
+		JLabel xMaxInputLabel = new JLabel("Graph X Max");
+		JTextField xMaxInput = new JTextField(Double.toString(xMax));
+		JLabel yMinInputLabel = new JLabel("Graph Y Min");
+		JTextField yMinInput = new JTextField(Double.toString(yMin));
+		JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+		JTextField yMaxInput = new JTextField(Double.toString(yMax));
+		
+		settingsPanel.add(xMinInputLabel);
+		settingsPanel.add(xMinInput);
+		settingsPanel.add(xMaxInputLabel);
+		settingsPanel.add(xMaxInput);
+		settingsPanel.add(yMinInputLabel);
+		settingsPanel.add(yMinInput);
+		settingsPanel.add(yMaxInputLabel);
+		settingsPanel.add(yMaxInput);
+		
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				xMin = Double.parseDouble(xMinInput.getText());
+				xMax = Double.parseDouble(xMaxInput.getText());
+				yMin = Double.parseDouble(yMinInput.getText());
+				yMax = Double.parseDouble(yMaxInput.getText());
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+3/27/2025: fixed bug of stuff going off right side due to borders
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 999;
+	
+	static JFrame frame;
+	
+	// Dimensions of the graph
+	static int winW = 1200;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -5;
+	static double xMax = 5;
+	static double yMin = -5;
+	static double yMax = 5;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static JPanel exprPanel;
+	static int numExprs = 2;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	static JTextField[] exprInputArr;
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	// https://stackoverflow.com/questions/13734069/how-can-i-set-in-the-midst/13734319#13734319
+	// Prevent an issue where the sizes of the window borders and top bar are making parts of the graph cut off
+	@Override
+    public Dimension getPreferredSize() {
+        return new Dimension(winW - exprPanel.getWidth(), winH);
+    }
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+			// Default interval at which f(x) is evaluated when graphing
+			// Will be adjusted based on how steep the graph is, in order
+			// to prevent the graph from appearing "dotted"
+			double xStepDefault = toGraph(graphW, graphH).x / minPoints; 
+			
+			g2d.setColor(exprColorArr[j]);
+			double x = xMin;
+			double xPrev = x - xStepDefault;
+			while(x < xMax) {
+				try {
+					double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+					double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+					
+					g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+				}
+				catch(ArithmeticException e) { // In case the x value is not in the domain
+					
+				}
+				
+				double xPrevCopy = xPrev;
+				xPrev = x;
+				
+				// Ensure that we don't plot the points too close together or too far apart
+				try {
+					double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+					x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * graphH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * graphH / (yMax - yMin) * slope)))); 
+				}
+				catch(ArithmeticException e) { // Deal with general instances of division by 0
+					x += xStepDefault;
+				}
+			}
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		frame.pack();
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(new Dimension(winW, winH));
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPH jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			exprPanel.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		// https://stackoverflow.com/a/4246418
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			// Apparently nextFloat() returns a double
+			double r = rand.nextDouble() / 2f + 0.5; 
+			double g = rand.nextDouble() / 2f + 0.5;
+			double b = rand.nextDouble() / 2f + 0.5;
+			exprColorArr[j] = new Color((float) r, (float) g, (float) b);
+		}
+		
+		// Refresh entire app
+		JButton refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		JButton settingsButton = new JButton("Graph Settings");
+		JPanel settingsPanel = new JPanel();
+		
+		JLabel xMinInputLabel = new JLabel("Graph X Min");
+		JTextField xMinInput = new JTextField(Double.toString(xMin));
+		JLabel xMaxInputLabel = new JLabel("Graph X Max");
+		JTextField xMaxInput = new JTextField(Double.toString(xMax));
+		JLabel yMinInputLabel = new JLabel("Graph Y Min");
+		JTextField yMinInput = new JTextField(Double.toString(yMin));
+		JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+		JTextField yMaxInput = new JTextField(Double.toString(yMax));
+		
+		settingsPanel.add(xMinInputLabel);
+		settingsPanel.add(xMinInput);
+		settingsPanel.add(xMaxInputLabel);
+		settingsPanel.add(xMaxInput);
+		settingsPanel.add(yMinInputLabel);
+		settingsPanel.add(yMinInput);
+		settingsPanel.add(yMaxInputLabel);
+		settingsPanel.add(yMaxInput);
+		
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				xMin = Double.parseDouble(xMinInput.getText());
+				xMax = Double.parseDouble(xMaxInput.getText());
+				yMin = Double.parseDouble(yMinInput.getText());
+				yMax = Double.parseDouble(yMaxInput.getText());
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+3/26/2025: Fixed bug of graph range not entirely fitting within frame
+
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static Random rand;
+	static int randSeed = 999;
+	
+	// Dimensions of the graph
+	static int winW = 900;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -10;
+	static double xMax = 10;
+	static double yMin = -10;
+	static double yMax = 10;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static JPanel exprPanel;
+	static int numExprs = 2;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	static JTextField[] exprInputArr;
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * graphW / (xMax - xMin);
+		double winY = winOriginY - y * graphH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Dimensions of just the graph, not the whole frame
+		double graphW = winW - exprPanel.getWidth();
+		double graphH = winH;
+		
+		// Set origin of axes
+		double winOriginX = graphW / 2 - (xMin + xMax) / 2 * graphW / (xMax - xMin);
+		double winOriginY = graphH / 2 + (yMin + yMax) / 2 * graphH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / graphW;
+		double y = (winY - winOriginY) * (yMax - yMin) / graphH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+			// Default interval at which f(x) is evaluated when graphing
+			// Will be adjusted based on how steep the graph is, in order
+			// to prevent the graph from appearing "dotted"
+			double xStepDefault = toGraph(winW, winH).x / minPoints; 
+			
+			g2d.setColor(exprColorArr[j]);
+			double x = xMin;
+			double xPrev = x - xStepDefault;
+			while(x < xMax) {
+				try {
+					double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+					double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+					
+					g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+				}
+				catch(ArithmeticException e) { // In case the x value is not in the domain
+					
+				}
+				
+				double xPrevCopy = xPrev;
+				xPrev = x;
+				
+				// Ensure that we don't plot the points too close together or too far apart
+				try {
+					double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+					x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * winH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * winH / (yMax - yMin) * slope)))); 
+				}
+				catch(ArithmeticException e) { // Deal with general instances of division by 0
+					x += xStepDefault;
+				}
+			}
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		JFrame frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(winW, winH);
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPH jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			exprPanel.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		// https://stackoverflow.com/a/4246418
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			// Apparently nextFloat() returns a double
+			double r = rand.nextDouble() / 2f + 0.5; 
+			double g = rand.nextDouble() / 2f + 0.5;
+			double b = rand.nextDouble() / 2f + 0.5;
+			exprColorArr[j] = new Color((float) r, (float) g, (float) b);
+		}
+		
+		// Refresh entire app
+		JButton refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		JButton settingsButton = new JButton("Graph Settings");
+		JPanel settingsPanel = new JPanel();
+		
+		JLabel xMinInputLabel = new JLabel("Graph X Min");
+		JTextField xMinInput = new JTextField(Double.toString(xMin));
+		JLabel xMaxInputLabel = new JLabel("Graph X Max");
+		JTextField xMaxInput = new JTextField(Double.toString(xMax));
+		JLabel yMinInputLabel = new JLabel("Graph Y Min");
+		JTextField yMinInput = new JTextField(Double.toString(yMin));
+		JLabel yMaxInputLabel = new JLabel("Graph Y Max");
+		JTextField yMaxInput = new JTextField(Double.toString(yMax));
+		
+		settingsPanel.add(xMinInputLabel);
+		settingsPanel.add(xMinInput);
+		settingsPanel.add(xMaxInputLabel);
+		settingsPanel.add(xMaxInput);
+		settingsPanel.add(yMinInputLabel);
+		settingsPanel.add(yMinInput);
+		settingsPanel.add(yMaxInputLabel);
+		settingsPanel.add(yMaxInput);
+		
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				xMin = Double.parseDouble(xMinInput.getText());
+				xMax = Double.parseDouble(xMaxInput.getText());
+				yMin = Double.parseDouble(yMinInput.getText());
+				yMax = Double.parseDouble(yMaxInput.getText());
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+3/26/2025: renamed pane to panel and added settings input
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static int randSeed = 999;
+	
+	// Dimensions of the graph
+	static int winW = 900;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -1;
+	static double xMax = 10;
+	static double yMin = -1;
+	static double yMax = 10;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 2;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	static JTextField[] exprInputArr;
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * winW / (xMax - xMin);
+		double winY = winOriginY - y * winH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / winW;
+		double y = (winY - winOriginY) * (yMax - yMin) / winH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+			// Default interval at which f(x) is evaluated when graphing
+			// Will be adjusted based on how steep the graph is, in order
+			// to prevent the graph from appearing "dotted"
+			double xStepDefault = toGraph(winW, winH).x / minPoints; 
+			
+			g2d.setColor(exprColorArr[j]);
+			double x = xMin;
+			double xPrev = x - xStepDefault;
+			while(x < xMax) {
+				try {
+					double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+					double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+					
+					g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+				}
+				catch(ArithmeticException e) { // In case the x value is not in the domain
+					
+				}
+				
+				double xPrevCopy = xPrev;
+				xPrev = x;
+				
+				// Ensure that we don't plot the points too close together or too far apart
+				try {
+					double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+					x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * winH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * winH / (yMax - yMin) * slope)))); 
+				}
+				catch(ArithmeticException e) { // Deal with general instances of division by 0
+					x += xStepDefault;
+				}
+			}
+		}
+		
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		Random rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		JFrame frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(winW, winH);
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPH jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		JPanel exprPanel = new JPanel();
+		exprPanel.setLayout(new GridLayout(maxNumExprs + 2, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPanel
+			exprPanel.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		// https://stackoverflow.com/a/4246418
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			// Apparently nextFloat() returns a double
+			double r = rand.nextDouble() / 2f + 0.5; 
+			double g = rand.nextDouble() / 2f + 0.5;
+			double b = rand.nextDouble() / 2f + 0.5;
+			exprColorArr[j] = new Color((float) r, (float) g, (float) b);
+		}
+		
+		// Refresh entire app
+		JButton refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPanel.add(refreshButton);
+		
+		// Settings panel
+		JButton settingsButton = new JButton("Graph Settings");
+		JPanel settingsPanel = new JPanel();
+		JLabel xMinInputLabel = new JLabel("Graph X Min");
+		JTextField xMinInput = new JTextField(Double.toString(xMin));
+		settingsPanel.add(xMinInputLabel);
+		settingsPanel.add(xMinInput);
+		settingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				JOptionPane.showMessageDialog(null, settingsPanel);
+				xMin = Double.parseDouble(xMinInput.getText());
+			}
+		});
+		exprPanel.add(settingsButton);
+		
+		frame.add(exprPanel, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+
+3/25/2025:added random colors to each equation
+
+/*
+ * CATBOY'S jGRAPH
+ * A simple, elegant graphing calculator in Java
+ * 
+ * Eric Li
+ * ericjli0480@gmail.com
+ * Elkins High School
+ * Mrs. Ward
+ * Period 5
+ */
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+import java.util.*;
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	static int randSeed = 999;
+	
+	// Dimensions of the graph
+	static int winW = 900;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -1;
+	static double xMax = 10;
+	static double yMin = -1;
+	static double yMax = 10;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Expression input
+	static int numExprs = 2;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	static JTextField[] exprInputArr;
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color invalidExprColor = Color.WHITE;
+	static Color[] exprColorArr;
+	
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * winW / (xMax - xMin);
+		double winY = winOriginY - y * winH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / winW;
+		double y = (winY - winOriginY) * (yMax - yMin) / winH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Leave invalid expressions uncolored
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(exprColorArr[j]);
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(invalidExprColor);
+				continue;
+			}
+			
+			// Default interval at which f(x) is evaluated when graphing
+			// Will be adjusted based on how steep the graph is, in order
+			// to prevent the graph from appearing "dotted"
+			double xStepDefault = toGraph(winW, winH).x / minPoints; 
+			
+			g2d.setColor(exprColorArr[j]);
+			double x = xMin;
+			double xPrev = x - xStepDefault;
+			while(x < xMax) {
+				try {
+					double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+					double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+					
+					g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+				}
+				catch(ArithmeticException e) { // In case the x value is not in the domain
+					
+				}
+				
+				double xPrevCopy = xPrev;
+				xPrev = x;
+				
+				// Ensure that we don't plot the points too close together or too far apart
+				try {
+					double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+					x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * winH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * winH / (yMax - yMin) * slope)))); 
+				}
+				catch(ArithmeticException e) { // Deal with general instances of division by 0
+					x += xStepDefault;
+				}
+			}
+		}
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		Random rand = new Random();
+		rand.setSeed(randSeed); // Used to generate colors for the graph
+		
+		/*
+		 * Frame
+		 */
+		JFrame frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(winW, winH);
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPH jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		JPanel exprPane = new JPanel();
+		exprPane.setLayout(new GridLayout(maxNumExprs + 1, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPane
+			exprPane.add(exprInputArr[j]);
+		}
+		
+		// Assign colors
+		// https://stackoverflow.com/a/4246418
+		exprColorArr = new Color[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			// Apparently nextFloat() returns a double
+			double r = rand.nextDouble() / 2f + 0.5; 
+			double g = rand.nextDouble() / 2f + 0.5;
+			double b = rand.nextDouble() / 2f + 0.5;
+			exprColorArr[j] = new Color((float) r, (float) g, (float) b);
+		}
+		
+		/*
+		 * Refresh entire app button
+		 */
+		JButton refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPane.add(refreshButton);
+		
+		frame.add(exprPane, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+
+3/25/2025: added multiple equation functionality
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+
+
+@SuppressWarnings("serial") // Suppresses "does not declare a static final serialVersionUID field"
+public class jGRAPH extends JPanel {
+	// Dimensions of the JFrame
+	static int winW = 900;
+	static int winH = 900;
+	
+	// x and y ranges of graph
+	static double xMin = -1;
+	static double xMax = 10;
+	static double yMin = -1;
+	static double yMax = 10;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep = 1;
+	static double yTickStep = 1;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color graphColor = Color.RED;
+	
+	// Expression input
+	static int numExprs = 2;
+	static int maxNumExprs = 20;
+	static int exprInputFieldSize = 30; // in characters
+	static JTextField[] exprInputArr;
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * winW / (xMax - xMin);
+		double winY = winOriginY - y * winH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / winW;
+		double y = (winY - winOriginY) * (yMax - yMin) / winH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		/*
+		 * Function plotting loop
+		 */
+		Expression expr;
+		for(int j = 0; j < numExprs; j++) {
+			// Highlight invalid text fields as red
+			try {
+				expr =  new ExpressionBuilder(exprInputArr[j].getText()).variables("x").build();
+				exprInputArr[j].setBackground(Color.WHITE);
+			}
+			catch(IllegalArgumentException e) { // Protect against nonsense inputs
+				exprInputArr[j].setBackground(Color.PINK);
+				continue;
+			}
+			
+			// Default interval at which f(x) is evaluated when graphing
+			// Will be adjusted based on how steep the graph is, in order
+			// to prevent the graph from appearing "dotted"
+			double xStepDefault = toGraph(winW, winH).x / minPoints; 
+			
+			g2d.setColor(graphColor);
+			double x = xMin;
+			double xPrev = x - xStepDefault;
+			while(x < xMax) {
+				try {
+					double winX = toWin(x, expr.setVariable("x", x).evaluate()).x;
+					double winY = toWin(x, expr.setVariable("x", x).evaluate()).y;
+					
+					g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+				}
+				catch(ArithmeticException e) { // In case the x value is not in the domain
+					
+				}
+				
+				double xPrevCopy = xPrev;
+				xPrev = x;
+				
+				// Ensure that we don't plot the points too close together or too far apart
+				try {
+					double slope = (expr.setVariable("x", x).evaluate() - expr.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+					x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * winH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * winH / (yMax - yMin) * slope)))); 
+				}
+				catch(ArithmeticException e) { // Deal with general instances of division by 0
+					x += xStepDefault;
+				}
+			}
+		}
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		
+		/*
+		 * Frame
+		 */
+		JFrame frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(winW, winH);
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPH jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		JPanel exprPane = new JPanel();
+		exprPane.setLayout(new GridLayout(maxNumExprs + 1, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		exprInputArr = new JTextField[numExprs];
+		for(int j = 0; j < numExprs; j++) {
+			JTextField exprInput = new JTextField(exprInputFieldSize);
+			exprInputArr[j] = exprInput;
+			exprInput.setMaximumSize(exprInput.getPreferredSize()); // Prevent text input from stretching to fill exprPane
+			exprPane.add(exprInputArr[j]);
+		}
+		
+		/*
+		 * Refresh entire app button
+		 */
+		JButton refreshButton = new JButton("Refresh All");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		exprPane.add(refreshButton);
+		
+		frame.add(exprPane, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+
+3/25/2025: added responsive graphing
+
+import net.objecthunter.exp4j.*;
+
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.event.*;
+
+import javax.swing.*;
+
+
+
+public class jGRAPH extends JPanel {
+	// Dimensions of the JFrame
+	static int winW = 900;
+	static int winH = 900;
+	
+	static Expression e;
+	
+	// x and y ranges of graph
+	static double xMin;
+	static double xMax;
+	static double yMin;
+	static double yMax;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep;
+	static double yTickStep;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color graphColor = Color.RED;
+	
+	// Equation input
+	static int numEqns = 1;
+	static int maxNumEqns = 20;
+	static int eqnInputFieldSize = 30; // in characters
+	static JTextField[] eqnInputArr = new JTextField[numEqns];
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * winW / (xMax - xMin);
+		double winY = winOriginY - y * winH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / winW;
+		double y = (winY - winOriginY) * (yMax - yMin) / winH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		/*
+		 * Function plotting
+		 */
+		
+		try {
+			e =  new ExpressionBuilder(eqnInputArr[0].getText()).variables("x").build();
+		}
+		catch(IllegalArgumentException e) { // Protect against nonsense inputs
+			return;
+		}
+		
+		// Default interval at which f(x) is evaluated when graphing
+		// Will be adjusted based on how steep the graph is, in order
+		// to prevent the graph from appearing "dotted"
+		double xStepDefault = toGraph(winW, winH).x / minPoints; 
+		
+		g2d.setColor(graphColor);
+		double x = xMin;
+		double xPrev = x - xStepDefault;
+		while(x < xMax) {
+			try {
+				double winX = toWin(x, e.setVariable("x", x).evaluate()).x;
+				double winY = toWin(x, e.setVariable("x", x).evaluate()).y;
+				
+				g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+			}
+			catch(ArithmeticException e) { // In case the x value is not in the domain
+				
+			}
+			
+			double xPrevCopy = xPrev;
+			xPrev = x;
+			
+			// Ensure that we don't plot the points too close together or too far apart
+			try {
+				double slope = (e.setVariable("x", x).evaluate() - e.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+				x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * winH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * winH / (yMax - yMin) * slope)))); 
+			}
+			catch(ArithmeticException e) { // Deal with general instances of division by 0
+				x += xStepDefault;
+			}
+		};
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		/*
+		 * Math settings
+		 */
+		
+		xMin = -1;
+		xMax = 10;
+		yMin = -1;
+		yMax = 10;
+		
+		xTickStep = 1;
+		yTickStep = 1;
+		
+		/*
+		 * Frame
+		 */
+		JFrame frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(winW, winH);
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPH jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		JPanel eqnPane = new JPanel();
+		eqnPane.setLayout(new GridLayout(maxNumEqns + 1, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		for(int j = 0; j < numEqns; j++) {
+			JTextField eqnInput = new JTextField(eqnInputFieldSize);
+			eqnInputArr[j] = eqnInput;
+			eqnInput.setMaximumSize(eqnInput.getPreferredSize()); // Prevent text input from stretching to fill eqnPane
+			eqnPane.add(eqnInputArr[j]);
+		}
+		
+		/*
+		 * Refresh entire app button
+		 */
+		JButton refreshButton = new JButton("Refresh Graph");
+		refreshButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				frame.repaint();
+			}
+		});
+		eqnPane.add(refreshButton);
+		
+		frame.add(eqnPane, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+	}
+}
+
+
+3/25/2025: completed layout of eqn input
+
+import net.objecthunter.exp4j.*;
+import java.awt.*;
+import java.awt.geom.*;
+import javax.swing.*;
+
+public class jGRAPH extends JPanel {
+	// Dimensions of the JFrame
+	static int winW = 900;
+	static int winH = 900;
+	
+	static Expression e;
+	
+	// x and y ranges of graph
+	static double xMin;
+	static double xMax;
+	static double yMin;
+	static double yMax;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep;
+	static double yTickStep;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color graphColor = Color.RED;
+	
+	// Equation input
+	static int numEqns = 1;
+	static int maxNumEqns = 20;
+	static int eqnInputFieldSize = 30; // in characters
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * winW / (xMax - xMin);
+		double winY = winOriginY - y * winH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / winW;
+		double y = (winY - winOriginY) * (yMax - yMin) / winH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	
+	/*
+	 * Draw the graph whenever necessary.
+	 */
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		/*
+		 * Function plotting
+		 */
+		
+		// Default interval at which f(x) is evaluated when graphing
+		// Will be adjusted based on how steep the graph is, in order
+		// to prevent the graph from appearing "dotted"
+		double xStepDefault = toGraph(winW, winH).x / minPoints; 
+		
+		g2d.setColor(graphColor);
+		double x = xMin;
+		double xPrev = x - xStepDefault;
+		while(x < xMax) {
+			try {
+				double winX = toWin(x, e.setVariable("x", x).evaluate()).x;
+				double winY = toWin(x, e.setVariable("x", x).evaluate()).y;
+				
+				g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+			}
+			catch(ArithmeticException e) { // In case the x value is not in the domain
+				
+			}
+			
+			double xPrevCopy = xPrev;
+			xPrev = x;
+			
+			// Ensure that we don't plot the points too close together or too far apart
+			try {
+				double slope = (e.setVariable("x", x).evaluate() - e.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+				x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * winH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * winH / (yMax - yMin) * slope)))); 
+			}
+			catch(ArithmeticException e) { // Deal with general instances of division by 0
+				x += xStepDefault;
+			}
+		};
+	}
+	
+	
+	/*
+	 * Run everything
+	 */
+	public static void main(String[] args) {
+		/*
+		 * Math settings
+		 */
+		e = new ExpressionBuilder("1 / x").variables("x").build();
+		
+		xMin = -1;
+		xMax = 10;
+		yMin = -1;
+		yMax = 10;
+		
+		xTickStep = 1;
+		yTickStep = 1;
+		
+		/*
+		 * Frame
+		 */
+		JFrame frame = new JFrame("Catboy's jGRAPH");
+		frame.setLayout(new BorderLayout());
+		frame.setSize(winW, winH);
+		
+		
+		/*
+		 * Graph
+		 */
+		jGRAPH jGRAPHInstance = new jGRAPH();
+		frame.add(jGRAPHInstance, BorderLayout.CENTER);
+		
+		
+		/*
+		 * Equation inputs
+		 */
+		JPanel eqnPane = new JPanel();
+		eqnPane.setLayout(new GridLayout(maxNumEqns + 1, 1)); // List everything vertically
+		
+		// Populate equation inputs
+		JTextField[] eqnInputArr = new JTextField[numEqns];
+		for(int j = 0; j < numEqns; j++) {
+			JTextField eqnInput = new JTextField(eqnInputFieldSize);
+			eqnInputArr[j] = eqnInput;
+			eqnInput.setMaximumSize(eqnInput.getPreferredSize()); // Prevent text input from stretching to fill eqnPane
+			eqnPane.add(eqnInputArr[j]);
+		}
+		JButton refreshButton = new JButton("Refresh Graph");		
+		eqnPane.add(refreshButton);
+		
+		frame.add(eqnPane, BorderLayout.WEST);
+		
+		// General settings
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+		
+		e = new ExpressionBuilder("3x").variables("x").build();
+
+		jGRAPHInstance.repaint();
+		
+	}
+}
+
+
+3/21/2025: added smoother graphing
+
+
+import net.objecthunter.exp4j.*;
+import java.awt.*;
+import java.awt.geom.*;
+import javax.swing.*;
+
+public class basicGraph extends JPanel {
+	// Dimensions of the JFrame
+	static int winW = 500;
+	static int winH = 500;
+	
+	static Expression e;
+	
+	// x and y ranges of graph
+	static double xMin;
+	static double xMax;
+	static double yMin;
+	static double yMax;
+	
+	// Size of tick marks and grid lines
+	static double xTickStep;
+	static double yTickStep;
+	
+	// Minimum number of points to be plotted to make the graph smooth
+	// Upper limit needed to prevent x-value from stalling near high slopes
+	static int minPoints = 10_000;
+	static int minPointsPerWinY = 5;
+	static int maxPointsPerWinY = 1_000;
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color graphColor = Color.RED;
+	
+	
+	/*
+	 * Transform the x and y coordinates on the graph to the 
+	 * x and y coordinates of the location of the point in the
+	 * window.
+	 * Remember to scale up the graph x and y to the window x y.
+	 */
+	public static Coord toWin(double x, double y) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * winW / (xMax - xMin);
+		double winY = winOriginY - y * winH / (yMax - yMin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	
+	/*
+	 * Reverse the process of toWin.
+	 */
+	public static Coord toGraph(double winX, double winY) {
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xMin + xMax) / 2 * winW / (xMax - xMin);
+		double winOriginY = winH / 2 + (yMin + yMax) / 2 * winH / (yMax - yMin);
+		
+		// Calculate point location
+		double x = (winX - winOriginX) * (xMax - xMin) / winW;
+		double y = (winY - winOriginY) * (yMax - yMin) / winH;
+		
+		return new Coord(x, y);
+		
+	}
+	
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		/*
+		 * Draw grid lines
+		 */
+		g2d.setColor(gridColor);
+		for(double xTick = Math.ceil(xMin / xTickStep); xTick <= xMax; xTick += xTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xTick, yMin).x, toWin(xTick, yMin).y, toWin(xTick, yMax).x, toWin(xTick, yMax).y));
+		}
+		for(double yTick = Math.ceil(yMin / yTickStep); yTick <= yMax; yTick += yTickStep) {
+			g2d.draw(new Line2D.Double(toWin(xMin, yTick).x, toWin(xMin, yTick).y, toWin(xMax, yTick).x, toWin(xMax, yTick).y));
+		}
+		
+		/*
+		 * Draw x and y axes
+		 */
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(toWin(0, yMin).x, toWin(0, yMin).y, toWin(0, yMax).x, toWin(0, yMax).y));
+		g2d.draw(new Line2D.Double(toWin(xMin, 0).x, toWin(xMin, 0).y, toWin(xMax, 0).x, toWin(xMax, 0).y));
+		
+		/*
+		 * Function plotting
+		 */
+		
+		// Default interval at which f(x) is evaluated when graphing
+		// Will be adjusted based on how steep the graph is, in order
+		// to prevent the graph from appearing "dotted"
+		double xStepDefault = toGraph(winW, winH).x / minPoints; 
+		
+		g2d.setColor(graphColor);
+		double x = xMin;
+		double xPrev = x - xStepDefault;
+		while(x < xMax) {
+			try {
+				double winX = toWin(x, e.setVariable("x", x).evaluate()).x;
+				double winY = toWin(x, e.setVariable("x", x).evaluate()).y;
+				
+				g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+			}
+			catch(ArithmeticException e) { // In case the x value is not in the domain
+				
+			}
+			
+			double xPrevCopy = xPrev;
+			xPrev = x;
+			
+			// Ensure that we don't plot the points too close together or too far apart
+			try {
+				double slope = (e.setVariable("x", x).evaluate() - e.setVariable("x", xPrevCopy).evaluate()) / (x - xPrevCopy);
+				x += Math.min(xStepDefault, Math.max(1.0 / (maxPointsPerWinY * winH / (yMax - yMin)), Math.abs(1.0 / (minPointsPerWinY * winH / (yMax - yMin) * slope)))); 
+			}
+			catch(ArithmeticException e) { // Deal with general instances of division by 0
+				x += xStepDefault;
+			}
+		};
+	}
+	public static void main(String[] args) {
+		basicGraph bg = new basicGraph();
+		
+		JFrame frame = new JFrame("Basic Graphing Calculator");
+		frame.setResizable(false);
+		frame.add(bg);
+		frame.setSize(winW, winH);
+		frame.setVisible(true);
+		
+		e = new ExpressionBuilder("1 / x").variables("x").build();
+		
+		xMin = -1;
+		xMax = 10;
+		yMin = -0;
+		yMax = 30;
+		
+		xTickStep = 1;
+		yTickStep = 1;
+
+		bg.repaint();
+		
+	}
+}
+#####################################################################################################################################################
+3/19/2025:
+
+import net.objecthunter.exp4j.*;
+import java.awt.*;
+import java.awt.geom.*;
+import javax.swing.*;
+
+public class basicGraph extends JPanel {
+	// Dimensions of the JFrame
+	static int winW = 500;
+	static int winH = 500;
+	
+	static Expression e;
+	
+	// x and y ranges of graph
+	static double xmin;
+	static double xmax;
+	static double ymin;
+	static double ymax;
+	
+	// Size of tick marks and grid lines
+	static double xtickstep;
+	static double ytickstep;
+	
+	static double xstep; // Intervals at which f(x) is evaluated when graphing
+	
+	// Colors
+	static Color gridColor = Color.LIGHT_GRAY;
+	static Color axesColor = Color.BLACK;
+	static Color graphColor = Color.RED;
+	
+	public static Coord tf(double x, double y) {
+		/*
+		 * Transform the x and y coordinates on the graph to the 
+		 * x and y coordinates of the location of the point in the
+		 * window.
+		 * Remember to scale up the graph x and y to the window x y.
+		 */
+		
+		// Set origin of axes
+		double winOriginX = winW / 2 - (xmin + xmax) / 2 * winW / (xmax - xmin);
+		double winOriginY = winH / 2 + (ymin + ymax) / 2 * winH / (ymax - ymin);
+		
+		// Calculate point location
+		double winX = winOriginX + x * winW / (xmax - xmin);
+		double winY = winOriginY - y * winH / (ymax - ymin);
+		
+		return new Coord(winX, winY);
+	}
+	
+	public void paintComponent(Graphics g) {
+		Graphics2D g2d = (Graphics2D) g;
+		
+		// Draw grid lines
+		g2d.setColor(gridColor);
+		for(double xtick = Math.ceil(xmin / xtickstep); xtick <= xmax; xtick += xtickstep) {
+			g2d.draw(new Line2D.Double(tf(xtick, ymin).x, tf(xtick, ymin).y, tf(xtick, ymax).x, tf(xtick, ymax).y));
+		}
+		for(double ytick = Math.ceil(ymin / ytickstep); ytick <= ymax; ytick += ytickstep) {
+			g2d.draw(new Line2D.Double(tf(xmin, ytick).x, tf(xmin, ytick).y, tf(xmax, ytick).x, tf(xmax, ytick).y));
+		}
+		
+		// Draw x and y axes
+		g2d.setColor(axesColor);
+		g2d.draw(new Line2D.Double(tf(0, ymin).x, tf(0, ymin).y, tf(0, ymax).x, tf(0, ymax).y));
+		g2d.draw(new Line2D.Double(tf(xmin, 0).x, tf(xmin, 0).y, tf(xmax, 0).x, tf(xmax, 0).y));
+		
+		// Plot function
+		g2d.setColor(graphColor);
+		double x = xmin;
+		while(x < xmax) {
+			try {
+				double winX = tf(x, e.setVariable("x", x).evaluate()).x;
+				double winY = tf(x, e.setVariable("x", x).evaluate()).y;
+				
+				g2d.draw(new Ellipse2D.Double(winX, winY, 1, 1));
+			}
+			catch(ArithmeticException e) { // In case the x value is not in the domain
+				
+			}
+			x += xstep;
+		};
+	}
+	public static void main(String[] args) {
+		basicGraph bg = new basicGraph();
+		
+		JFrame frame = new JFrame("Basic Graphing Calculator");
+		frame.setResizable(false);
+		frame.add(bg);
+		frame.setSize(winW, winH);
+		frame.setVisible(true);
+		
+		e = new ExpressionBuilder("1 / x").variables("x").build();
+		
+		xmin = -10;
+		xmax = 10;
+		ymin = -10;
+		ymax = 10;
+		
+		xstep = 0.01;
+		
+		xtickstep = 1;
+		ytickstep = 1;
+
+		bg.repaint();
+		
+	}
+}
