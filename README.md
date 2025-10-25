@@ -13,3 +13,6 @@
 #### Generating output tables:
 - Click the "Table" button next to your expression of interest. You can configure settings in the popup window.
 - View the tables in the "tables" folder. If using Eclipse, you will need to first refresh the folder in the Project Explorer.
+
+## Why is there no commit history???
+This project was created as the capstone project for my Data Structures and Algorithms course in high school. We were required to develop it on the school computers, on which we couldn't install git! So, my "version control" for this ended up being a .txt file that I would copy-paste code into once I finished each feature. *facepalm*
